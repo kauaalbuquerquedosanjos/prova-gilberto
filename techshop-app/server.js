@@ -1,10 +1,13 @@
 import express from 'express';
-import mysql from 'mysql2/promise';
+import { MongoClient, ObjectId } from 'mongodb';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,83 +15,98 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Ajuste a senha ('password') se o MySQL da escola exigir uma
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: '', // Deixe vazio se for o padrão sem senha do laboratório
-  database: 'techshop',
-  waitForConnections: true,
-  connectionLimit: 10
-});
+// String de conexão obtida do MongoDB Atlas (será lida da Vercel ou local)
+const uri = process.env.MONGODB_URI || "SUA_URL_DO_MONGO_AQUI";
+const client = new MongoClient(uri);
+let db;
 
+async function conectarBanco() {
+  try {
+    await client.connect();
+    db = client.db('techshop');
+    console.log("Conectado ao MongoDB com sucesso!");
+  } catch (erro) {
+    console.error("Falha ao conectar no MongoDB:", erro);
+  }
+}
+conectarBanco();
+
+// Middleware de Controle de Acesso
 const verificarAcesso = (nivelRequerido) => {
   return (req, res, next) => {
     const nivelUsuario = req.headers['user-level'];
-    if (!nivelUsuario) {
-      return res.status(401).json({ erro: 'Usuário não identificado.' });
-    }
+    if (!nivelUsuario) return res.status(401).json({ erro: 'Usuário não identificado.' });
     if (nivelRequerido === 'Admin' && nivelUsuario !== 'Admin') {
-      return res.status(403).json({ erro: 'Acesso negado. Apenas Administradores podem alterar dados.' });
+      return res.status(403).json({ erro: 'Acesso negado. Apenas Admins mudam dados.' });
     }
     next();
   };
 };
 
+// Endpoint 1: Relatório de Vendas (Simulado agregando coleções no Mongo)
 app.get('/api/relatorio-vendas', async (req, res) => {
   try {
-    const query = `
-      SELECT p.id_pedido, c.nome AS nome_cliente,
-      SUM(i.quantidade * i.preco_unitario) AS total_pedido, p.status_pedido
-      FROM pedidos p
-      INNER JOIN clientes c ON p.id_cliente = c.id_cliente
-      INNER JOIN itens_pedido i ON p.id_pedido = i.id_pedido
-      GROUP BY p.id_pedido, c.nome, p.status_pedido;
-    `;
-    const [rows] = await pool.query(query);
-    res.json(rows);
+    const vendas = await db.collection('pedidos').aggregate([
+      {
+        \$lookup: {
+          from: 'clientes',
+          localField: 'id_cliente',
+          foreignField: '_id',
+          as: 'cliente'
+        }
+      },
+      { unwind: 'cliente' },
+      {
+        \$project: {
+          id_pedido: '\$_id',
+          nome_cliente: '\$cliente.nome',
+          total_pedido: '\$total',
+          status_pedido: '\$status'
+        }
+      }
+    ]).toArray();
+    res.json(vendas);
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
 });
 
+// Endpoint 2: Análise de Estoque Crítico
 app.get('/api/estoque', async (req, res) => {
   try {
-    const query = `
-      SELECT prod.id_produto, prod.nome_produto, prod.estoque AS estoque_atual,
-      IFNULL(SUM(itens.quantidade), 0) AS total_unidades_vendidas
-      FROM produtos prod
-      LEFT JOIN itens_pedido itens ON prod.id_produto = itens.id_produto
-      GROUP BY prod.id_produto, prod.nome_produto, prod.estoque;
-    `;
-    const [rows] = await pool.query(query);
-    res.json(rows);
+    const estoque = await db.collection('produtos').find({}).toArray();
+    const formatado = estoque.map(p => ({
+      id_produto: p._id,
+      nome_produto: p.nome,
+      estoque_atual: p.estoque,
+      total_unidades_vendidas: p.vendas || 0
+    }));
+    res.json(formatado);
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
 });
 
+// Endpoint 3: Atualizar estoque (Protegido para Admin)
 app.put('/api/produtos/:id', verificarAcesso('Admin'), async (req, res) => {
   const { id } = req.params;
   const { novoEstoque } = req.body;
 
   if (novoEstoque === undefined || novoEstoque < 0) {
-    return res.status(400).json({ erro: 'Quantidade de estoque inválida.' });
+    return res.status(400).json({ erro: 'Quantidade inválida.' });
   }
   try {
-    const [result] = await pool.query(
-      'UPDATE produtos SET estoque = ? WHERE id_produto = ?',
-      [novoEstoque, id]
+    const result = await db.collection('produtos').updateOne(
+      { _id: new ObjectId(id) },
+      { \$set: { estoque: novoEstoque } }
     );
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ erro: 'Produto não encontrado.' });
-    }
-    res.json({ mensagem: 'Estoque updated com sucesso com privilégios de Admin!' });
+    if (result.matchedCount === 0) return res.status(404).json({ erro: 'Produto não encontrado.' });
+    res.json({ mensagem: 'Estoque atualizado no MongoDB com privilégios de Admin!' });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Servidor TechShop rodando em http://localhost:${PORT}`);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
