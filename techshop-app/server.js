@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// String de conexão obtida do MongoDB Atlas (será lida da Vercel ou local)
+// Conexão dinâmica (Usa a variável da Vercel ou string local)
 const uri = process.env.MONGODB_URI || "SUA_URL_DO_MONGO_AQUI";
 const client = new MongoClient(uri);
 let db;
@@ -31,19 +31,21 @@ async function conectarBanco() {
 }
 conectarBanco();
 
-// Middleware de Controle de Acesso
+// Middleware de Controle de Acesso (RBAC)
 const verificarAcesso = (nivelRequerido) => {
   return (req, res, next) => {
     const nivelUsuario = req.headers['user-level'];
     if (!nivelUsuario) return res.status(401).json({ erro: 'Usuário não identificado.' });
     if (nivelRequerido === 'Admin' && nivelUsuario !== 'Admin') {
-      return res.status(403).json({ erro: 'Acesso negado. Apenas Admins mudam dados.' });
+      return res.status(403).json({ erro: 'Acesso negado. Apenas Administradores podem fazer alterações.' });
     }
     next();
   };
 };
 
-// Endpoint 1: Relatório de Vendas (Simulado agregando coleções no Mongo)
+// -------------------------------------------------------------
+// ENDPOINTS DE LEITURA (GET)
+// -------------------------------------------------------------
 app.get('/api/relatorio-vendas', async (req, res) => {
   try {
     const vendas = await db.collection('pedidos').aggregate([
@@ -71,7 +73,6 @@ app.get('/api/relatorio-vendas', async (req, res) => {
   }
 });
 
-// Endpoint 2: Análise de Estoque Crítico
 app.get('/api/estoque', async (req, res) => {
   try {
     const estoque = await db.collection('produtos').find({}).toArray();
@@ -87,7 +88,10 @@ app.get('/api/estoque', async (req, res) => {
   }
 });
 
-// Endpoint 3: Atualizar estoque (Protegido para Admin)
+// -------------------------------------------------------------
+// ENDPOINTS DE MANIPULAÇÃO DE DADOS (PUT / DELETE) - Protegidos para Admin
+// -------------------------------------------------------------
+// Atualizar estoque
 app.put('/api/produtos/:id', verificarAcesso('Admin'), async (req, res) => {
   const { id } = req.params;
   const { novoEstoque } = req.body;
@@ -102,6 +106,30 @@ app.put('/api/produtos/:id', verificarAcesso('Admin'), async (req, res) => {
     );
     if (result.matchedCount === 0) return res.status(404).json({ erro: 'Produto não encontrado.' });
     res.json({ mensagem: 'Estoque atualizado no MongoDB com privilégios de Admin!' });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// Excluir pedido/venda
+app.delete('/api/vendas/:id', verificarAcesso('Admin'), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await db.collection('pedidos').deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) return res.status(404).json({ erro: 'Pedido não encontrado.' });
+    res.json({ mensagem: 'Pedido removido com sucesso com privilégios de Admin!' });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// Excluir produto do estoque
+app.delete('/api/produtos/:id', verificarAcesso('Admin'), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await db.collection('produtos').deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) return res.status(404).json({ erro: 'Produto não encontrado.' });
+    res.json({ mensagem: 'Produto excluído com sucesso com privilégios de Admin!' });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }

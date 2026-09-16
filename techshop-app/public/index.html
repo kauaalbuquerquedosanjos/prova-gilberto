@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Painel TechShop - Full Stack CRUD</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 30px; background-color: #f4f6f9; }
+        .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .btn { padding: 6px 12px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin-right: 5px; }
+        .btn-update { background-color: #28a745; color: white; }
+        .btn-delete { background-color: #dc3545; color: white; }
+        .seletor-acesso { padding: 10px; font-weight: bold; background-color: #e2e3e5; border-radius: 5px; }
+        input[type="number"] { width: 70px; padding: 4px; }
+    </style>
+</head>
+<body>
+    <h1>Gerenciamento de Dados TechShop (MongoDB + Vercel)</h1>
+
+    <!-- Simulador de Login / Nível de Acesso -->
+    <div class="card seletor-acesso">
+        <label for="nivelAcesso">Simular Nível de Acesso Atual: </label>
+        <select id="nivelAcesso" onchange="atualizarInterface()">
+            <option value="Client">Cliente (Apenas Visualização)</option>
+            <option value="Admin">Administrador (Acesso Total)</option>
+        </select>
+    </div>
+
+    <!-- Tabela 1: Relatório de Vendas (DQL + DML Delete) -->
+    <div class="card">
+        <h2>Relatório de Vendas (Consultas Integradas)</h2>
+        <button class="btn btn-update" onclick="carregarVendas()">Atualizar Relatório</button>
+        <table id="tabelaVendas">
+            <thead>
+                <tr>
+                    <th>ID Pedido</th>
+                    <th>Cliente</th>
+                    <th>Total Pedido</th>
+                    <th>Status</th>
+                    <th>Ações (Restrito Admin)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <!-- Tabela 2: Gestão de Estoque (DQL + DML Update/Delete) -->
+    <div class="card">
+        <h2>Controle de Estoque Técnico</h2>
+        <table id="tabelaEstoque">
+            <thead>
+                <tr>
+                    <th>Produto</th>
+                    <th>Estoque Atual</th>
+                    <th>Total Vendido</th>
+                    <th>Ações (Restrito Admin)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        function obterNivelAcesso() {
+            return document.getElementById('nivelAcesso').value;
+        }
+
+        async function carregarVendas() {
+            const resposta = await fetch('/api/relatorio-vendas');
+            const dados = await resposta.json();
+            const tbody = document.querySelector('#tabelaVendas tbody');
+            tbody.innerHTML = '';
+            dados.forEach(venda => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${venda.id_pedido}</td>
+                        <td>${venda.nome_cliente}</td>
+                        <td>R$ ${parseFloat(venda.total_pedido).toFixed(2)}</td>
+                        <td>${venda.status_pedido}</td>
+                        <td>
+                            <button class="btn btn-delete" onclick="deletarVenda('${venda.id_pedido}')">Excluir Pedido</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        async function carregarEstoque() {
+            const resposta = await fetch('/api/estoque');
+            const dados = await resposta.json();
+            const tbody = document.querySelector('#tabelaEstoque tbody');
+            tbody.innerHTML = '';
+            dados.forEach(prod => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${prod.nome_produto}</td>
+                        <td>
+                            <input type="number" id="input-${prod.id_produto}" value="${prod.estoque_atual}">
+                        </td>
+                        <td>${prod.total_unidades_vendidas}</td>
+                        <td>
+                            <button class="btn btn-update" onclick="alterarEstoque('${prod.id_produto}')">Salvar</button>
+                            <button class="btn btn-delete" onclick="deletarProduto('${prod.id_produto}')">Excluir</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        async function alterarEstoque(id) {
+            const novoEstoque = document.getElementById(`input-${id}`).value;
+            const nivelUsuario = obterNivelAcesso();
+
+            const resposta = await fetch(`/api/produtos/${id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'user-level': nivelUsuario
+                },
+                body: JSON.stringify({ novoEstoque: parseInt(novoEstoque) })
+            });
+
+            const resultado = await resposta.json();
+            if (resposta.ok) {
+                alert(resultado.mensagem);
+                carregarEstoque();
+            } else {
+                alert('Erro: ' + resultado.erro);
+            }
+        }
+
+        async function deletarVenda(id) {
+            const nivelUsuario = obterNivelAcesso();
+            const resposta = await fetch(`/api/vendas/${id}`, {
+                method: 'DELETE',
+                headers: { 'user-level': nivelUsuario }
+            });
+            const resultado = await resposta.json();
+            if (resposta.ok) {
+                alert(resultado.mensagem);
+                carregarVendas();
+            } else {
+                alert('Erro: ' + resultado.erro);
+            }
+        }
+
+        async function deletarProduto(id) {
+            const nivelUsuario = obterNivelAcesso();
+            const resposta = await fetch(`/api/produtos/${id}`, {
+                method: 'DELETE',
+                headers: { 'user-level': nivelUsuario }
+            });
+            const resultado = await resposta.json();
+            if (resposta.ok) {
+                alert(resultado.mensagem);
+                carregarEstoque();
+            } else {
+                alert('Erro: ' + resultado.erro);
+            }
+        }
+
+        function atualizarInterface() {
+            carregarEstoque();
+        }
+
+        carregarVendas();
+        carregarEstoque();
+    </script>
+</body>
+</html>
